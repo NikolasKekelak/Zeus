@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+
+import sys
+import time
+import locale
+import curses
+import requests
+from datetime import datetime
+
+
+API_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    "?latitude=48.15&longitude=17.11"
+    "&current=temperature_2m,weather_code"
+    "&daily=temperature_2m_max,temperature_2m_min,weather_code"
+    "&timezone=auto"
+)
+
+
+# ASCII-safe weather icons
+WEATHER_ICONS = {
+    0: ("Clear", "☀️"),
+    1: ("Mainly clear", "🌤️"),
+    2: ("Partly cloudy", "⛅"),
+    3: ("Overcast", "☁️"),
+    45: ("Fog", "🌫️"),
+    48: ("Depositing rime fog", "🌫️"),
+
+    51: ("Light drizzle", "🌦️"),
+    53: ("Drizzle", "🌦️"),
+    55: ("Dense drizzle", "🌧️"),
+    56: ("Freezing drizzle", "🌧️"),
+    57: ("Dense freezing drizzle", "🌧️"),
+
+    61: ("Light rain", "🌦️"),
+    63: ("Rain", "🌧️"),
+    65: ("Heavy rain", "🌧️"),
+    66: ("Freezing rain", "🌧️"),
+    67: ("Heavy freezing rain", "🌧️"),
+
+    71: ("Light snow", "🌨️"),
+    73: ("Snow", "❄️"),
+    75: ("Heavy snow", "🌨️"),
+    77: ("Snow grains", "❄️"),
+
+    80: ("Rain showers", "🌦️"),
+    81: ("Heavy showers", "🌧️"),
+    82: ("Violent showers", "⛈️"),
+
+    85: ("Snow showers", "🌨️"),
+    86: ("Heavy snow showers", "🌨️"),
+
+    95: ("Thunderstorm", "⛈️"),
+    96: ("Thunder w/ hail", "⛈️"),
+    99: ("Thunder w/ heavy hail", "⛈️"),
+}
+
+
+def fetch_weather():
+    resp = requests.get(API_URL, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    current = data.get("current", {})
+    daily = data.get("daily", {})
+    return {
+        "location": "Bratislava",
+        "current": {
+            "temp": current.get("temperature_2m"),
+            "code": current.get("weather_code"),
+        },
+        "daily": [
+            {
+                "date": d,
+                "tmax": tmax,
+                "tmin": tmin,
+                "code": code,
+            }
+            for d, tmax, tmin, code in zip(
+                daily.get("time", []),
+                daily.get("temperature_2m_max", []),
+                daily.get("temperature_2m_min", []),
+                daily.get("weather_code", []),
+            )
+        ],
+        "fetched_at": datetime.now(),
+    }
+
+
+def code_to_desc_icon(code):
+    if code in WEATHER_ICONS:
+        return WEATHER_ICONS[code]
+    return ("Unknown", "[?]")
+
+
+def print_simple():
+    data = fetch_weather()
+    current = data["current"]
+    daily = data["daily"]
+    print(f"Weather for {data['location']}")
+
+    if current.get("temp") is not None:
+        desc, icon = code_to_desc_icon(current.get("code"))
+        print(f"Now: {current['temp']:>5.1f}°C  {icon} {desc}")
+
+    print()
+    print("Forecast:")
+
+    for d in daily:
+        desc, icon = code_to_desc_icon(d.get("code"))
+
+        print(
+            f"{d['date']:<12}"  # left aligned date
+            f"{icon:<3}"  # icon column
+            f"{desc:<20}"  # weather description
+            f"{d['tmax']:>5.1f}°C / {d['tmin']:>5.1f}°C"
+        )
+
+
+def main():
+    try:
+        locale.setlocale(locale.LC_ALL, "")
+    except Exception:
+        pass
+
+    args = sys.argv[1:]
+    use_no_tui = any(arg in ("--no-tui", "-t0") for arg in args)
+    force_tui = any(arg in ("--force-tui", "-t1") for arg in args)
+    debug = any(arg in ("--debug", "-d") for arg in args)
+
+    # Decide mode
+    if use_no_tui:
+        if debug:
+            print("[zeus] debug: --no-tui specified; using simple output.", file=sys.stderr)
+        try:
+            print_simple()
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        return
+
+    print_simple()
+
+if __name__ == "__main__":
+    main()
