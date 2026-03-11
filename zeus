@@ -4,17 +4,28 @@ import sys
 import time
 import locale
 import curses
+import json
+from pathlib import Path
 import requests
 from datetime import datetime
 
+from geopy import Nominatim
 
-API_URL = (
-    "https://api.open-meteo.com/v1/forecast"
-    "?latitude=48.15&longitude=17.11"
-    "&current=temperature_2m,weather_code"
-    "&daily=temperature_2m_max,temperature_2m_min,weather_code"
-    "&timezone=auto"
-)
+DEFAULT_LOCATION = {
+    "name": "Bratislava",
+    "latitude": 48.15,
+    "longitude": 17.11,
+}
+
+
+def build_api_url(lat, lon):
+    return (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        "&current=temperature_2m,weather_code"
+        "&daily=temperature_2m_max,temperature_2m_min,weather_code"
+        "&timezone=auto"
+    )
 
 
 # ASCII-safe weather icons
@@ -56,14 +67,58 @@ WEATHER_ICONS = {
 }
 
 
-def fetch_weather():
-    resp = requests.get(API_URL, timeout=10)
+def load_locations(path: str | Path | None = None):
+    # Determine default path: locations.json next to this script (project root)
+    if path is None:
+        path = Path(__file__).resolve().parent / "locations.json"
+    else:
+        path = Path(path)
+
+    try:
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                # Validate entries and keep only valid ones
+                valid = []
+                for entry in data:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = entry.get("name")
+                    lat = entry.get("latitude")
+                    lon = entry.get("longitude")
+                    if (
+                        isinstance(name, str)
+                        and isinstance(lat, (int, float))
+                        and isinstance(lon, (int, float))
+                    ):
+                        valid.append({"name": name, "latitude": float(lat), "longitude": float(lon)})
+                if valid:
+                    return valid
+    except Exception:
+        # Any error -> fall back to default
+        pass
+
+    # Fallback to default location list
+    return [DEFAULT_LOCATION]
+
+
+def get_default_location():
+    locations = load_locations()
+    return locations[0]
+
+
+def fetch_weather(location: dict | None = None):
+    if location is None:
+        location = get_default_location()
+    api_url = build_api_url(location["latitude"], location["longitude"])
+    resp = requests.get(api_url, timeout=10)
     resp.raise_for_status()
     data = resp.json()
     current = data.get("current", {})
     daily = data.get("daily", {})
     return {
-        "location": "Bratislava",
+        "location": location.get("name", DEFAULT_LOCATION["name"]),
         "current": {
             "temp": current.get("temperature_2m"),
             "code": current.get("weather_code"),
@@ -96,25 +151,28 @@ def print_simple():
     data = fetch_weather()
     current = data["current"]
     daily = data["daily"]
-    print(f"Weather for {data['location']}")
-
+    print("+" + "-" * 52 + "+")
+    print(f"|Weather for {data['location']}")
+    print("+" + "-" * 52 + "+")
     if current.get("temp") is not None:
         desc, icon = code_to_desc_icon(current.get("code"))
-        print(f"Now: {current['temp']:>5.1f}°C  {icon} {desc}")
+        print(f"|Now: {current['temp']:>5.1f}°C  {icon} {desc}")
 
-    print()
-    print("Forecast:")
-
+    print("+" + "-" * 52 + "+")
+    print("|Forecast:                                           |")
+    print(f"|{'Date':<12}{'':<3}{'Description':<20}{'Temp':>5}            |")
+    print("+" + "-" * 52 + "+")
     for d in daily:
         desc, icon = code_to_desc_icon(d.get("code"))
 
         print(
-            f"{d['date']:<12}"  # left aligned date
+            f"|{d['date']:<12}"  # left aligned date
             f"{icon:<3}"  # icon column
             f"{desc:<20}"  # weather description
-            f"{d['tmax']:>5.1f}°C / {d['tmin']:>5.1f}°C"
-        )
+            f"{d['tmax']:>5.1f}°C / {d['tmin']:>5.1f}°C|"
 
+        )
+    print("+" + "-" * 52 + "+")
 
 def main():
     try:
@@ -123,20 +181,13 @@ def main():
         pass
 
     args = sys.argv[1:]
-    use_no_tui = any(arg in ("--no-tui", "-t0") for arg in args)
-    force_tui = any(arg in ("--force-tui", "-t1") for arg in args)
-    debug = any(arg in ("--debug", "-d") for arg in args)
 
-    # Decide mode
-    if use_no_tui:
-        if debug:
-            print("[zeus] debug: --no-tui specified; using simple output.", file=sys.stderr)
-        try:
-            print_simple()
-        except Exception as e:
-            print(f"Error: {e}")
-            sys.exit(1)
-        return
+    if any(arg in ("--new", "-n") for arg in args):
+        geolocator = Nominatim(user_agent="zeus-weather")
+        location = geolocator.geocode(args[1])
+        print(f"Latitude: {location.latitude}")
+        print(f"Longitude: {location.longitude}")
+        print(f"Full address: {location.address}")
 
     print_simple()
 
